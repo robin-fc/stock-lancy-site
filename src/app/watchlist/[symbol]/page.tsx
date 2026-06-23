@@ -16,6 +16,14 @@ import {
   BarChart3,
   Clock,
   Globe,
+  Star,
+  ThumbsUp,
+  ThumbsDown,
+  Send,
+  CheckCircle2,
+  Layers,
+  GitCompare,
+  Scale,
 } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
@@ -36,13 +44,14 @@ import {
   formatDate,
   formatDateTime,
 } from "@/lib/utils";
-import { RISK_LABELS } from "@/types";
+import { RISK_LABELS, FACTOR_LABELS } from "@/types";
 import type {
   StockQuote,
   StockCandle,
   TechnicalIndicators,
   StockBasicInfo,
   StockAIAnalysis,
+  AnalysisFactor,
 } from "@/types";
 
 /** 根据股票代码判断交易所前缀 (6开头为上交所, 其余为深交所) */
@@ -110,6 +119,21 @@ export default function WatchlistDetailPage() {
   const [analyzing, setAnalyzing] = React.useState(false);
   const [analyzeError, setAnalyzeError] = React.useState<string | null>(null);
 
+  // 用户反馈状态
+  const [feedbackRating, setFeedbackRating] = React.useState(0);
+  const [feedbackExpanded, setFeedbackExpanded] = React.useState(false);
+  const [helpfulFactors, setHelpfulFactors] = React.useState<string[]>([]);
+  const [missingFactors, setMissingFactors] = React.useState<string[]>([]);
+  const [feedbackComment, setFeedbackComment] = React.useState("");
+  const [submittingFeedback, setSubmittingFeedback] = React.useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = React.useState(false);
+  const [feedbackError, setFeedbackError] = React.useState<string | null>(null);
+
+  // 因子权重公式状态
+  const [formulaFactors, setFormulaFactors] = React.useState<AnalysisFactor[]>([]);
+  const [formulaTotalWeight, setFormulaTotalWeight] = React.useState(0);
+  const [formulaLoading, setFormulaLoading] = React.useState(false);
+
   React.useEffect(() => {
     if (!initialized) init();
   }, [initialized, init]);
@@ -172,6 +196,70 @@ export default function WatchlistDetailPage() {
     } finally {
       setAnalyzing(false);
     }
+  }
+
+  // 加载因子权重公式
+  const loadFormula = React.useCallback(async () => {
+    setFormulaLoading(true);
+    try {
+      const res = await authFetch(`/api/analysis/formula`);
+      if (res.ok) {
+        const json = await res.json();
+        setFormulaFactors(json.factors || []);
+        setFormulaTotalWeight(json.total_weight || 0);
+      }
+    } catch {
+      // 静默失败，不影响主流程
+    } finally {
+      setFormulaLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadFormula();
+  }, [loadFormula]);
+
+  // 提交用户反馈
+  async function handleSubmitFeedback() {
+    if (!symbol || feedbackRating === 0) return;
+    setSubmittingFeedback(true);
+    setFeedbackError(null);
+    try {
+      const res = await authFetch(`/api/stocks/${symbol}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({
+          rating: feedbackRating,
+          helpful_factors: helpfulFactors.length > 0 ? helpfulFactors : undefined,
+          missing_factors: missingFactors.length > 0 ? missingFactors : undefined,
+          comment: feedbackComment.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        setFeedbackError(await parseApiError(res));
+        return;
+      }
+      setFeedbackSubmitted(true);
+      setFeedbackExpanded(false);
+      // 重新加载公式以反映权重调整
+      loadFormula();
+    } catch {
+      setFeedbackError("网络错误，请稍后重试");
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  }
+
+  /** 根据因子评分返回进度条颜色 */
+  function getFactorScoreColor(score: number): string {
+    if (score >= 60) return "var(--green)";
+    if (score >= 40) return "var(--yellow)";
+    return "var(--red)";
+  }
+
+  /** 格式化权重为百分比显示 (兼容 0-1 小数与 0-100 百分比) */
+  function formatWeight(weight: number): string {
+    const pct = weight <= 1 ? weight * 100 : weight;
+    return `${pct.toFixed(1)}%`;
   }
 
   // 鉴权加载中
@@ -708,6 +796,385 @@ export default function WatchlistDetailPage() {
                   点击上方"生成AI分析"按钮，获取该股票的 AI 深度分析报告
                 </p>
               </div>
+            )}
+          </Card>
+
+          {/* g. 因子分解展示模块 */}
+          {aiAnalysis?.factor_scores &&
+            Object.keys(aiAnalysis.factor_scores).length > 0 && (
+              <Card className="mt-6 p-5">
+                <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-[var(--text-primary)]">
+                  <Layers size={18} className="text-[var(--accent)]" />
+                  因子分解
+                </h2>
+                <div className="space-y-3">
+                  {Object.entries(aiAnalysis.factor_scores).map(
+                    ([key, factor]) => {
+                      const label = FACTOR_LABELS[key] || key;
+                      const scoreColor = getFactorScoreColor(factor.score);
+                      return (
+                        <div
+                          key={key}
+                          className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-[var(--text-primary)]">
+                                {label}
+                              </p>
+                              {factor.detail && (
+                                <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-muted)]">
+                                  {factor.detail}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-4 text-xs">
+                              <div className="text-right">
+                                <p className="text-[var(--text-muted)]">评分</p>
+                                <p
+                                  className="font-semibold"
+                                  style={{ color: scoreColor }}
+                                >
+                                  {factor.score.toFixed(0)}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[var(--text-muted)]">权重</p>
+                                <p className="font-semibold text-[var(--text-secondary)]">
+                                  {formatWeight(factor.weight)}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[var(--text-muted)]">贡献度</p>
+                                <p className="font-semibold text-[var(--text-primary)]">
+                                  {factor.contribution.toFixed(2)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--border)]">
+                            <div
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{
+                                width: `${Math.min(100, Math.max(0, factor.score))}%`,
+                                backgroundColor: scoreColor,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    }
+                  )}
+                </div>
+                {aiAnalysis.formula_version && (
+                  <p className="mt-3 text-xs text-[var(--text-muted)]">
+                    公式版本: {aiAnalysis.formula_version}
+                  </p>
+                )}
+              </Card>
+            )}
+
+          {/* h. 多策略交叉印证模块 */}
+          {aiAnalysis?.strategies && aiAnalysis.strategies.length > 0 && (
+            <Card className="mt-6 p-5">
+              <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-[var(--text-primary)]">
+                <GitCompare size={18} className="text-[var(--accent)]" />
+                多策略交叉印证
+              </h2>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] text-left">
+                      <th className="pb-2 pr-4 text-xs font-medium text-[var(--text-secondary)]">
+                        策略
+                      </th>
+                      <th className="pb-2 pr-4 text-xs font-medium text-[var(--text-secondary)]">
+                        信号
+                      </th>
+                      <th className="pb-2 pr-4 text-right text-xs font-medium text-[var(--text-secondary)]">
+                        评分
+                      </th>
+                      <th className="pb-2 text-xs font-medium text-[var(--text-secondary)]">
+                        依据
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border)]">
+                    {aiAnalysis.strategies.map((s, i) => {
+                      const scoreColor = getFactorScoreColor(s.score);
+                      return (
+                        <tr key={i}>
+                          <td className="py-2.5 pr-4 text-sm text-[var(--text-primary)]">
+                            {s.strategy}
+                          </td>
+                          <td className="py-2.5 pr-4">
+                            <SignalBadge signal={s.signal} size="sm" />
+                          </td>
+                          <td
+                            className="py-2.5 pr-4 text-right text-sm font-semibold"
+                            style={{ color: scoreColor }}
+                          >
+                            {s.score.toFixed(0)}
+                          </td>
+                          <td className="py-2.5 text-xs leading-relaxed text-[var(--text-muted)]">
+                            {s.reason}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* i. 用户反馈打分模块 */}
+          {aiAnalysis && (
+            <Card className="mt-6 p-5">
+              <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-[var(--text-primary)]">
+                <Star size={18} className="text-[var(--accent)]" />
+                分析反馈
+              </h2>
+
+              {feedbackSubmitted ? (
+                <div className="flex items-center gap-2 rounded-lg border border-[var(--green)]/30 bg-[var(--green)]/10 px-4 py-3">
+                  <CheckCircle2
+                    size={16}
+                    className="shrink-0 text-[var(--green)]"
+                  />
+                  <p className="text-sm text-[var(--green)]">
+                    感谢反馈！因子权重已调整
+                  </p>
+                  <span className="ml-auto text-xs text-[var(--text-muted)]">
+                    您已反馈
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* 星级评分 */}
+                  <div>
+                    <p className="mb-2 text-sm text-[var(--text-secondary)]">
+                      您对本次分析的评价？
+                    </p>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() => {
+                            setFeedbackRating(star);
+                            setFeedbackExpanded(true);
+                          }}
+                          className="cursor-pointer p-1 transition-transform hover:scale-110"
+                          aria-label={`${star} 星`}
+                        >
+                          <Star
+                            size={24}
+                            className={cn(
+                              "transition-colors",
+                              star <= feedbackRating
+                                ? "fill-[var(--yellow)] text-[var(--yellow)]"
+                                : "text-[var(--text-muted)]"
+                            )}
+                          />
+                        </button>
+                      ))}
+                      {feedbackRating > 0 && (
+                        <span className="ml-2 self-center text-sm text-[var(--text-secondary)]">
+                          {["", "很差", "较差", "一般", "较好", "很好"][
+                            feedbackRating
+                          ]}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 反馈表单 (点击星级后展开) */}
+                  {feedbackExpanded && (
+                    <div className="space-y-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4">
+                      {/* 有帮助的因子 */}
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
+                          <ThumbsUp size={14} className="text-[var(--green)]" />
+                          哪些因子分析有帮助？
+                        </p>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          {Object.entries(FACTOR_LABELS).map(
+                            ([key, label]) => (
+                              <label
+                                key={`helpful-${key}`}
+                                className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-secondary)]"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={helpfulFactors.includes(key)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setHelpfulFactors([
+                                        ...helpfulFactors,
+                                        key,
+                                      ]);
+                                    } else {
+                                      setHelpfulFactors(
+                                        helpfulFactors.filter((f) => f !== key)
+                                      );
+                                    }
+                                  }}
+                                  className="accent-[var(--accent)]"
+                                />
+                                {label}
+                              </label>
+                            )
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 缺失或不准的因子 */}
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
+                          <ThumbsDown size={14} className="text-[var(--red)]" />
+                          哪些因子分析缺失或不准？
+                        </p>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          {Object.entries(FACTOR_LABELS).map(
+                            ([key, label]) => (
+                              <label
+                                key={`missing-${key}`}
+                                className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-secondary)]"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={missingFactors.includes(key)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setMissingFactors([
+                                        ...missingFactors,
+                                        key,
+                                      ]);
+                                    } else {
+                                      setMissingFactors(
+                                        missingFactors.filter((f) => f !== key)
+                                      );
+                                    }
+                                  }}
+                                  className="accent-[var(--accent)]"
+                                />
+                                {label}
+                              </label>
+                            )
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 补充说明 */}
+                      <div>
+                        <p className="mb-2 text-sm font-medium text-[var(--text-primary)]">
+                          补充说明
+                        </p>
+                        <textarea
+                          value={feedbackComment}
+                          onChange={(e) => setFeedbackComment(e.target.value)}
+                          rows={3}
+                          placeholder="请输入您的补充说明（可选）..."
+                          className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus-visible:border-[var(--accent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        />
+                      </div>
+
+                      {/* 错误提示 */}
+                      {feedbackError && (
+                        <div className="flex items-center gap-2 rounded-lg border border-[var(--red)]/30 bg-[var(--red)]/10 px-3 py-2">
+                          <AlertCircle
+                            size={14}
+                            className="shrink-0 text-[var(--red)]"
+                          />
+                          <p className="text-xs text-[var(--red)]">
+                            {feedbackError}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* 提交按钮 */}
+                      <div className="flex justify-end">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={handleSubmitFeedback}
+                          disabled={
+                            submittingFeedback || feedbackRating === 0
+                          }
+                        >
+                          {submittingFeedback ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                          ) : (
+                            <Send size={14} />
+                          )}
+                          提交反馈
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* j. 因子权重可视化模块 */}
+          <Card className="mt-6 p-5">
+            <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-[var(--text-primary)]">
+              <Scale size={18} className="text-[var(--accent)]" />
+              当前因子权重公式
+            </h2>
+            {formulaLoading ? (
+              <div className="py-8">
+                <Loading text="加载因子权重..." />
+              </div>
+            ) : formulaFactors.length > 0 ? (
+              <div className="space-y-3">
+                {formulaFactors
+                  .filter((f) => f.is_active)
+                  .map((factor) => {
+                    const label =
+                      FACTOR_LABELS[factor.factor_key] ||
+                      factor.factor_name ||
+                      factor.factor_key;
+                    const weightPct =
+                      formulaTotalWeight > 0
+                        ? (factor.weight / formulaTotalWeight) * 100
+                        : 0;
+                    return (
+                      <div key={factor.id}>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-[var(--text-secondary)]">
+                            {label}
+                          </span>
+                          <span className="font-semibold text-[var(--text-primary)]">
+                            {weightPct.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--border)]">
+                          <div
+                            className="h-full rounded-full bg-[var(--accent)] transition-all duration-500"
+                            style={{
+                              width: `${Math.min(100, Math.max(0, weightPct))}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                <p className="pt-2 text-xs text-[var(--text-muted)]">
+                  已根据用户反馈调整{" "}
+                  {formulaFactors.reduce(
+                    (sum, f) => sum + (f.adjustment_count || 0),
+                    0
+                  )}{" "}
+                  次
+                </p>
+              </div>
+            ) : (
+              <p className="py-8 text-center text-sm text-[var(--text-muted)]">
+                暂无因子权重数据
+              </p>
             )}
           </Card>
 

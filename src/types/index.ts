@@ -191,7 +191,60 @@ export interface StockAIAnalysis {
   indicators: Record<string, number>;
   triggered_by: string | null;
   created_at: string;
+  // 新增: 因子分解
+  factor_scores?: Record<string, { score: number; weight: number; contribution: number; detail: string }>;
+  strategies?: { strategy: string; signal: Signal; score: number; reason: string }[];
+  formula_version?: string;
 }
+
+/** 分析因子定义 */
+export interface AnalysisFactor {
+  id: string;
+  factor_key: string;
+  factor_name: string;
+  weight: number;
+  description: string | null;
+  is_active: boolean;
+  adjustment_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 用户反馈 */
+export interface AnalysisFeedback {
+  id: string;
+  analysis_id: string;
+  user_id: string;
+  rating: number;
+  helpful_factors: string[] | null;
+  missing_factors: string[] | null;
+  comment: string | null;
+  weight_adjustments: Record<string, number> | null;
+  applied: boolean;
+  created_at: string;
+}
+
+/** 因子标识 */
+export type FactorKey =
+  | 'technical'
+  | 'fundamental'
+  | 'policy'
+  | 'market_sentiment'
+  | 'industry'
+  | 'financial_report'
+  | 'momentum'
+  | 'value';
+
+export const FACTOR_LABELS: Record<string, string> = {
+  technical: '技术面分析',
+  fundamental: '基本面分析',
+  policy: '政策面分析',
+  market_sentiment: '市场情绪',
+  industry: '行业面分析',
+  financial_report: '财报面分析',
+  momentum: '动量策略',
+  value: '价值策略',
+};
 
 /** 股票搜索结果 */
 export interface StockSearchResult {

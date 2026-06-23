@@ -5,7 +5,7 @@ import {
   getCandles,
   calculateIndicators,
 } from '@/lib/stock-api';
-import { analyzeStock } from '@/lib/ai-service';
+import { analyzeStock, setFactorWeights } from '@/lib/ai-service';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -74,11 +74,60 @@ export async function POST(
     // 使用报价中的名称
     const name = quote.name || symbol;
 
-    // 调用 AI 分析生成结果 (内部有 8 秒超时和 fallback 机制)
-    const analysis = await analyzeStock(symbol, name, quote, candles, indicators);
-
-    // upsert 到 stock_ai_analysis 表 (symbol 唯一约束, 自动覆盖旧分析)
+    // 服务端客户端 (用于读取因子权重、基本面缓存, 以及保存分析结果)
     const serverClient = createServerClient();
+
+    // 1. 从数据库 analysis_factors 表加载当前因子权重, 注入到 AI 分析服务
+    const { data: factorRows } = await serverClient
+      .from('analysis_factors')
+      .select('factor_key, weight')
+      .eq('is_active', true);
+
+    if (factorRows && factorRows.length > 0) {
+      setFactorWeights(
+        factorRows.map(
+          (f: { factor_key: string; weight: number }) => ({
+            key: f.factor_key,
+            weight: f.weight,
+          })
+        )
+      );
+    }
+
+    // 2. 查询缓存的基本面数据 (按 symbol 查询, 没有则传 null)
+    let basicInfo: {
+      pe_ratio: number | null;
+      pb_ratio: number | null;
+      market_cap: number | null;
+      sector: string | null;
+    } | null = null;
+
+    const { data: cachedBasic } = await serverClient
+      .from('stock_basic_info')
+      .select('pe_ratio, pb_ratio, market_cap, sector')
+      .eq('symbol', symbol)
+      .single();
+
+    if (cachedBasic) {
+      basicInfo = {
+        pe_ratio: cachedBasic.pe_ratio,
+        pb_ratio: cachedBasic.pb_ratio,
+        market_cap: cachedBasic.market_cap,
+        sector: cachedBasic.sector,
+      };
+    }
+
+    // 3. 调用 AI 分析生成结果 (内部有 8 秒超时和 fallback 机制)
+    const analysis = await analyzeStock(
+      symbol,
+      name,
+      quote,
+      candles,
+      indicators,
+      basicInfo
+    );
+
+    // 4. upsert 到 stock_ai_analysis 表 (symbol 唯一约束, 自动覆盖旧分析)
     const { data: savedAnalysis, error: upsertError } = await serverClient
       .from('stock_ai_analysis')
       .upsert(
@@ -96,6 +145,9 @@ export async function POST(
           risk_level: analysis.risk_level,
           indicators: indicators as unknown as Record<string, number>,
           triggered_by: userId,
+          factor_scores: analysis.factor_scores,
+          strategies: analysis.strategies,
+          formula_version: analysis.formula_version,
           created_at: new Date().toISOString(),
         },
         { onConflict: 'symbol' }
