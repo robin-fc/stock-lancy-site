@@ -1,8 +1,8 @@
 import type { StockQuote, StockCandle, TechnicalIndicators, Signal, RiskLevel } from '@/types';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_BASE = 'https://api.openai.com/v1';
-const MODEL = 'gpt-4o-mini';
+const AGNES_API_KEY = process.env.AGNES_API_KEY || '';
+const AGNES_BASE = 'https://apihub.agnes-ai.com/v1';
+const MODEL = 'agnes-2.0-flash';
 
 interface AIAnalysisResult {
   signal: Signal;
@@ -25,18 +25,18 @@ export async function analyzeStock(
   indicators: TechnicalIndicators
 ): Promise<AIAnalysisResult> {
   // 如果没有 API key, 使用技术指标生成基础分析
-  if (!OPENAI_API_KEY) {
+  if (!AGNES_API_KEY) {
     return generateFallbackAnalysis(symbol, name, quote, indicators);
   }
 
   const prompt = buildAnalysisPrompt(symbol, name, quote, candles, indicators);
 
   try {
-    const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    const res = await fetch(`${AGNES_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${AGNES_API_KEY}`,
       },
       body: JSON.stringify({
         model: MODEL,
