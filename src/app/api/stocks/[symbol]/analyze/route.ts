@@ -4,11 +4,11 @@ import {
   getQuote,
   getCandles,
   calculateIndicators,
-  getBasicInfo,
 } from '@/lib/stock-api';
 import { analyzeStock } from '@/lib/ai-service';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 /** 手动触发 AI 分析并缓存到 stock_ai_analysis 表 */
 export async function POST(
@@ -46,17 +46,21 @@ export async function POST(
 
     const userId = userData.user.id;
 
-    // 1. 获取实时报价
-    const quote = await getQuote(symbol);
+    // 并行获取报价和 K 线数据, 减少总耗时
+    const [quoteResult, candlesResult] = await Promise.all([
+      getQuote(symbol),
+      getCandles(symbol, 'D'),
+    ]);
+
+    const quote = quoteResult;
     if (!quote || quote.current_price === 0) {
       return NextResponse.json(
-        { error: '无法获取股票数据' },
+        { error: '无法获取股票数据，可能已停牌' },
         { status: 400 }
       );
     }
 
-    // 2. 获取 K 线数据
-    const candles = await getCandles(symbol, 'D');
+    const candles = candlesResult;
     if (candles.length < 10) {
       return NextResponse.json(
         { error: 'K 线数据不足, 无法计算技术指标' },
@@ -64,20 +68,16 @@ export async function POST(
       );
     }
 
-    // 3. 计算技术指标
+    // 计算技术指标
     const indicators = calculateIndicators(candles);
 
-    // 获取股票名称 (优先用报价中的名称, 其次基本面, 最后用代码)
-    let name = quote.name || symbol;
-    const basicInfo = await getBasicInfo(symbol);
-    if (basicInfo?.name) {
-      name = basicInfo.name;
-    }
+    // 使用报价中的名称
+    const name = quote.name || symbol;
 
-    // 4. 调用 AI 分析生成结果
+    // 调用 AI 分析生成结果 (内部有 8 秒超时和 fallback 机制)
     const analysis = await analyzeStock(symbol, name, quote, candles, indicators);
 
-    // 5. upsert 到 stock_ai_analysis 表 (symbol 唯一约束, 自动覆盖旧分析)
+    // upsert 到 stock_ai_analysis 表 (symbol 唯一约束, 自动覆盖旧分析)
     const serverClient = createServerClient();
     const { data: savedAnalysis, error: upsertError } = await serverClient
       .from('stock_ai_analysis')
@@ -110,7 +110,7 @@ export async function POST(
       );
     }
 
-    // 6. 返回 AI 分析结果
+    // 返回 AI 分析结果
     return NextResponse.json({
       analysis: savedAnalysis || analysis,
       message: 'AI 分析完成',

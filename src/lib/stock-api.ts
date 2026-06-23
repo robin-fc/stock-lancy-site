@@ -20,13 +20,28 @@ function getSecId(symbol: string): string {
   return `0.${code}`;
 }
 
+/** 带超时的 fetch 封装 */
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /** 获取股票实时报价 */
 export async function getQuote(symbol: string): Promise<StockQuote | null> {
   try {
     const secid = getSecId(symbol);
     const url = `${EASTMONEY_QUOTE_URL}?secid=${secid}&fields=f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f170`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://quote.eastmoney.com/',
@@ -91,7 +106,7 @@ export async function searchStocks(keyword: string, limit: number = 10): Promise
 
   try {
     const url = `${EASTMONEY_SEARCH_URL}?input=${encodeURIComponent(keyword.trim())}&type=14&token=D43BF722C8E33BDC906FB84D85E329E8&count=${limit}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://quote.eastmoney.com/',
@@ -136,7 +151,7 @@ export async function getBasicInfo(symbol: string): Promise<{
     // f57=代码 f58=名称 f59=小数位 f84=总市值 f85=流通市值 f162=市盈率 f167=市净率 f127=行业
     const url = `${EASTMONEY_BASIC_URL}?secid=${secid}&fields=f57,f58,f59,f84,f85,f162,f167,f127`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://quote.eastmoney.com/',
@@ -202,7 +217,7 @@ export async function getCandles(
 
     const url = `${EASTMONEY_KLINE_URL}?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57&klt=${klt}&fqt=1&lmt=120&beg=${beg}&end=${end}`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://quote.eastmoney.com/',

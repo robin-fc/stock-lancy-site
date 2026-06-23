@@ -32,6 +32,10 @@ export async function analyzeStock(
   const prompt = buildAnalysisPrompt(symbol, name, quote, candles, indicators);
 
   try {
+    // 使用 AbortController 设置 8 秒超时, 避免 Vercel Hobby 版 10 秒限制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
     const res = await fetch(`${AGNES_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -71,7 +75,10 @@ export async function analyzeStock(
         temperature: 0.3,
         max_tokens: 1500,
       }),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!res.ok) {
       return generateFallbackAnalysis(symbol, name, quote, indicators);
