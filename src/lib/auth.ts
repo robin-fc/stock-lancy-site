@@ -3,11 +3,13 @@ import type { Profile } from '@/types';
 
 /** 注册新用户 (带邀请码) */
 export async function signUp(email: string, password: string, name?: string, invitationCode?: string) {
+  const redirectTo = process.env.NEXT_PUBLIC_APP_URL || 'https://stock.lancy.site';
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: { name: name || '', invitation_code: invitationCode || '' },
+      emailRedirectTo: `${redirectTo}/dashboard`,
     },
   });
   return { data, error };

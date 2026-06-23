@@ -43,7 +43,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ loading: false });
       return { error: error.message };
     }
-    set({ loading: false });
+    // 注册成功后获取 profile (关闭邮箱验证时 signUp 会直接返回 session)
+    const profile = await getCurrentProfile();
+    set({ profile, loading: false });
     return { error: null };
   },
 

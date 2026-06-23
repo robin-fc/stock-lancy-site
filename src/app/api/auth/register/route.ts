@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 邀请码验证通过, 调用 Supabase 注册
+    const redirectTo = process.env.NEXT_PUBLIC_APP_URL || 'https://stock.lancy.site';
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
           name: name || '',
           invitation_code: invitation_code.trim(),
         },
+        emailRedirectTo: `${redirectTo}/dashboard`,
       },
     });
 
