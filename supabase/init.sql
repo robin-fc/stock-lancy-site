@@ -154,6 +154,45 @@ CREATE TABLE IF NOT EXISTS public.pick_performance (
   UNIQUE(pick_id, recorded_at)
 );
 
+-- ========== 7. stock_basic_info (股票基本信息缓存) ==========
+-- 首次访问时从东方财富拉取并缓存, 永久存储, 减少API调用
+CREATE TABLE IF NOT EXISTS public.stock_basic_info (
+  symbol TEXT PRIMARY KEY,           -- 股票代码, 如 600519
+  name TEXT NOT NULL,                -- 股票名称, 如 贵州茅台
+  exchange TEXT NOT NULL DEFAULT 'SH', -- 交易所 SH/SZ/BJ
+  sector TEXT,                       -- 行业板块
+  market_cap NUMERIC(20,2),          -- 总市值(亿元)
+  pe_ratio NUMERIC(12,2),            -- 市盈率
+  pb_ratio NUMERIC(12,2),            -- 市净率
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now() -- 最后更新时间
+);
+
+-- ========== 8. stock_ai_analysis (AI分析报告缓存) ==========
+-- 手动触发AI分析, 每只股票保留1条(覆盖旧建议)
+CREATE TABLE IF NOT EXISTS public.stock_ai_analysis (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  symbol TEXT NOT NULL,              -- 股票代码
+  name TEXT NOT NULL,                -- 股票名称
+  -- AI分析结果
+  signal TEXT NOT NULL CHECK (signal IN ('strong_buy', 'buy', 'hold', 'sell', 'strong_sell')),
+  confidence INTEGER NOT NULL DEFAULT 50 CHECK (confidence >= 0 AND confidence <= 100),
+  entry_price NUMERIC(12,4),
+  target_price NUMERIC(12,4),
+  stop_loss NUMERIC(12,4),
+  analysis TEXT NOT NULL,            -- 详细分析报告 (Markdown)
+  summary TEXT NOT NULL,             -- 一句话总结
+  key_factors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  risk_level TEXT NOT NULL DEFAULT 'medium' CHECK (risk_level IN ('low', 'medium', 'high')),
+  indicators JSONB NOT NULL DEFAULT '{}'::jsonb, -- 技术指标快照
+  -- 触发信息
+  triggered_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL, -- 触发用户
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 每只股票只保留1条, 新分析覆盖旧分析
+  UNIQUE(symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_ai_analysis_symbol ON public.stock_ai_analysis(symbol);
+
 -- ========== RLS 策略 ==========
 
 -- profiles: 用户只能读写自己的
@@ -190,6 +229,14 @@ CREATE POLICY "Anyone can view performance" ON public.pick_performance FOR SELEC
 -- invitation_codes: 认证用户可验证邀请码 (只读), 管理通过 service_role
 ALTER TABLE public.invitation_codes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Authenticated users can check invitation codes" ON public.invitation_codes FOR SELECT TO authenticated USING (true);
+
+-- stock_basic_info: 所有认证用户可读
+ALTER TABLE public.stock_basic_info ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated users can view stock_basic_info" ON public.stock_basic_info FOR SELECT TO authenticated USING (true);
+
+-- stock_ai_analysis: 所有认证用户可读
+ALTER TABLE public.stock_ai_analysis ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated users can view stock_ai_analysis" ON public.stock_ai_analysis FOR SELECT TO authenticated USING (true);
 
 -- ========== 更新时间戳触发器 ==========
 CREATE OR REPLACE FUNCTION public.update_updated_at()

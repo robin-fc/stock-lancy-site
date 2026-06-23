@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   BookmarkPlus,
@@ -13,6 +14,7 @@ import {
   AlertCircle,
   Bookmark,
   Search,
+  ChevronRight,
 } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
@@ -24,7 +26,7 @@ import { Loading } from "@/components/ui/loading";
 import { useAuthStore } from "@/store/auth";
 import { authFetch, parseApiError } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
-import type { WatchlistItem } from "@/types";
+import type { WatchlistItem, StockSearchResult } from "@/types";
 
 export default function WatchlistPage() {
   const router = useRouter();
@@ -38,6 +40,13 @@ export default function WatchlistPage() {
   const [newName, setNewName] = React.useState("");
   const [addError, setAddError] = React.useState<string | null>(null);
   const [adding, setAdding] = React.useState(false);
+
+  // 股票搜索自动补全
+  const [searchResults, setSearchResults] = React.useState<StockSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = React.useState(false);
+  const [showDropdown, setShowDropdown] = React.useState(false);
+  const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
 
   // 编辑状态
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -78,6 +87,63 @@ export default function WatchlistPage() {
   React.useEffect(() => {
     loadWatchlist();
   }, [loadWatchlist]);
+
+  // 股票搜索 debounce 300ms
+  React.useEffect(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+
+    const query = newSymbol.trim();
+    if (!query) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    setSearchLoading(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await authFetch(`/api/stocks/search?q=${encodeURIComponent(query)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSearchResults(data.results || []);
+          setShowDropdown(true);
+        } else {
+          setSearchResults([]);
+        }
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+      }
+    };
+  }, [newSymbol]);
+
+  // 点击外部关闭下拉
+  React.useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // 选中搜索结果
+  function handleSelectResult(result: StockSearchResult) {
+    setNewSymbol(result.symbol);
+    setNewName(result.name);
+    setShowDropdown(false);
+    setSearchResults([]);
+  }
 
   // 添加自选股
   async function handleAdd(e: React.FormEvent) {
@@ -250,13 +316,53 @@ export default function WatchlistPage() {
               添加自选股
             </h2>
             <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row">
-              <div className="flex-1">
+              <div className="relative flex-1" ref={dropdownRef}>
                 <Input
-                  placeholder="股票代码 (如 600519)"
+                  placeholder="股票代码或名称 (如 600519 / 茅台)"
                   value={newSymbol}
                   onChange={(e) => setNewSymbol(e.target.value)}
                   disabled={adding}
+                  onFocus={() => {
+                    if (searchResults.length > 0) setShowDropdown(true);
+                  }}
                 />
+                {searchLoading && (
+                  <Loader2
+                    size={14}
+                    className="animate-spin absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+                  />
+                )}
+                {/* 搜索建议下拉 */}
+                {showDropdown && (searchResults.length > 0 || !searchLoading) && (
+                  <div className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-xl">
+                    {searchResults.length > 0 ? (
+                      searchResults.map((result) => (
+                        <button
+                          key={result.symbol}
+                          type="button"
+                          onClick={() => handleSelectResult(result)}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-xs font-bold text-[var(--text-primary)]">
+                              {result.symbol}
+                            </span>
+                            <span className="text-sm text-[var(--text-secondary)]">
+                              {result.name}
+                            </span>
+                          </div>
+                          {result.exchange && (
+                            <Badge variant="gray">{result.exchange}</Badge>
+                          )}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-3 py-3 text-center text-xs text-[var(--text-muted)]">
+                        未找到匹配的股票
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex-1">
                 <Input
@@ -371,7 +477,10 @@ export default function WatchlistPage() {
                     ) : (
                       /* 展示模式 */
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
+                        <Link
+                          href={`/watchlist/${item.symbol}`}
+                          className="min-w-0 flex-1 cursor-pointer"
+                        >
                           <div className="flex items-center gap-2">
                             <span className="flex h-9 w-9 items-center justify-center rounded-md bg-[var(--surface-hover)] text-xs font-bold text-[var(--text-primary)]">
                               {item.symbol.slice(0, 2)}
@@ -413,7 +522,7 @@ export default function WatchlistPage() {
                               添加于 {formatDate(item.created_at)}
                             </span>
                           </div>
-                        </div>
+                        </Link>
 
                         <div className="flex shrink-0 items-center gap-1">
                           <Button
@@ -436,6 +545,16 @@ export default function WatchlistPage() {
                             ) : (
                               <Trash2 size={14} />
                             )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            asChild
+                          >
+                            <Link href={`/watchlist/${item.symbol}`}>
+                              查看详情
+                              <ChevronRight size={14} />
+                            </Link>
                           </Button>
                         </div>
                       </div>

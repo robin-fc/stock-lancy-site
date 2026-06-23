@@ -1,8 +1,10 @@
-import type { StockQuote, StockCandle, TechnicalIndicators } from '@/types';
+import type { StockQuote, StockCandle, TechnicalIndicators, StockSearchResult } from '@/types';
 
 // ========== 东方财富 API (免费, 无需 API Key) ==========
 const EASTMONEY_QUOTE_URL = 'https://push2.eastmoney.com/api/qt/stock/get';
 const EASTMONEY_KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
+const EASTMONEY_SEARCH_URL = 'https://searchapi.eastmoney.com/api/suggest/get';
+const EASTMONEY_BASIC_URL = 'https://push2.eastmoney.com/api/qt/stock/get';
 
 /**
  * 获取东方财富 secid (市场代码.股票代码)
@@ -75,6 +77,102 @@ export async function getCompanyProfile(symbol: string) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 搜索股票 (东方财富搜索API)
+ * 支持代码、名称、拼音搜索
+ */
+export async function searchStocks(keyword: string, limit: number = 10): Promise<StockSearchResult[]> {
+  if (!keyword || keyword.trim().length < 1) return [];
+
+  try {
+    const url = `${EASTMONEY_SEARCH_URL}?input=${encodeURIComponent(keyword.trim())}&type=14&token=D43BF722C8E33BDC906FB84D85E329E8&count=${limit}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const list: any[] = json?.QuotationCodeTable?.Data;
+    if (!list || !Array.isArray(list)) return [];
+
+    return list
+      .filter((item) => {
+        // 只返回 A 股 (沪市/深市/北交所)
+        const code = item.Code || '';
+        return /^\d{6}$/.test(code);
+      })
+      .map((item) => ({
+        symbol: item.Code,
+        name: item.Name,
+        exchange: item.MktNum === '0' ? 'SZ' : item.MktNum === '1' ? 'SH' : 'BJ',
+        pinyin: item.Pinyin || undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 获取股票基本面数据 (市盈率、市净率、总市值等)
+ * 东方财富实时行情接口包含这些字段
+ */
+export async function getBasicInfo(symbol: string): Promise<{
+  name: string;
+  exchange: string;
+  sector: string | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  pb_ratio: number | null;
+} | null> {
+  try {
+    const secid = getSecId(symbol);
+    // f57=代码 f58=名称 f59=小数位 f84=总市值 f85=流通市值 f162=市盈率 f167=市净率 f127=行业
+    const url = `${EASTMONEY_BASIC_URL}?secid=${secid}&fields=f57,f58,f59,f84,f85,f162,f167,f127`;
+
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const data = json?.data;
+    if (!data || !data.f57) return null;
+
+    const decimal = data.f59 || 2;
+    const divisor = Math.pow(10, decimal);
+
+    return {
+      name: data.f58 || symbol,
+      exchange: symbol.startsWith('6') ? 'SH' : symbol.startsWith('8') || symbol.startsWith('4') ? 'BJ' : 'SZ',
+      sector: data.f127 || null,
+      // f84 总市值, 单位是元, 转换为亿元
+      market_cap: data.f84 ? data.f84 / 1e8 : null,
+      // f162 市盈率(动态)
+      pe_ratio: data.f162 ? data.f162 / divisor : null,
+      // f167 市净率
+      pb_ratio: data.f167 ? data.f167 / divisor : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 生成东方财富网页链接 */
+export function getEastmoneyUrl(symbol: string): string {
+  const exchange = symbol.startsWith('6') ? 'sh' : 'sz';
+  return `https://quote.eastmoney.com/${exchange}${symbol}.html`;
+}
+
+/** 生成雪球网页链接 */
+export function getXueqiuUrl(symbol: string): string {
+  const exchange = symbol.startsWith('6') ? 'SH' : 'SZ';
+  return `https://xueqiu.com/S/${exchange}${symbol}`;
+}
+
+/** 生成同花顺网页链接 */
+export function get10jqkaUrl(symbol: string): string {
+  const exchange = symbol.startsWith('6') ? 'sh' : 'sz';
+  return `https://stockpage.10jqka.com.cn/${exchange}${symbol}/`;
 }
 
 /** 获取历史 K 线数据 */

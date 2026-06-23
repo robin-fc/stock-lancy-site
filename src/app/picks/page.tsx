@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Filter, Calendar, Search, TrendingUp, RefreshCw } from "lucide-react";
+import { Filter, Calendar, Search, TrendingUp, RefreshCw, Zap, AlertCircle } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loading } from "@/components/ui/loading";
+import { Loading, LoadingOverlay } from "@/components/ui/loading";
 import { PickCard } from "@/components/stock/pick-card";
 import { useAuthStore } from "@/store/auth";
-import { getAuthHeaders } from "@/lib/api";
+import { authFetch, getAuthHeaders, parseApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { SIGNAL_LABELS } from "@/types";
 import type { StockPick, Signal } from "@/types";
@@ -29,7 +29,14 @@ export default function PicksPage() {
   const [picks, setPicks] = React.useState<StockPick[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [signalFilter, setSignalFilter] = React.useState<Signal | "all">("all");
-  const [dateFilter, setDateFilter] = React.useState("");
+  const [dateFilter, setDateFilter] = React.useState(
+    () => new Date().toISOString().split("T")[0]
+  );
+
+  // 生成选股状态
+  const [generating, setGenerating] = React.useState(false);
+  const [generateMsg, setGenerateMsg] = React.useState<string | null>(null);
+  const [generateError, setGenerateError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!initialized) init();
@@ -65,7 +72,35 @@ export default function PicksPage() {
 
   function handleReset() {
     setSignalFilter("all");
-    setDateFilter("");
+    setDateFilter(new Date().toISOString().split("T")[0]);
+  }
+
+  // 生成今日选股
+  async function handleGenerate() {
+    setGenerating(true);
+    setGenerateMsg("正在生成选股，约需1分钟...");
+    setGenerateError(null);
+    try {
+      const res = await authFetch("/api/picks/generate", { method: "POST" });
+      if (!res.ok) {
+        setGenerateError(await parseApiError(res));
+        return;
+      }
+      const data = await res.json();
+      const successCount = data.success_count ?? 0;
+      const errorCount = data.error_count ?? 0;
+      setGenerateMsg(
+        `生成完成：成功 ${successCount} 条${errorCount > 0 ? `，失败 ${errorCount} 条` : ""}`
+      );
+      // 生成完成后自动刷新列表
+      await loadPicks();
+      // 3 秒后清除提示
+      setTimeout(() => setGenerateMsg(null), 3000);
+    } catch {
+      setGenerateError("网络错误，请稍后重试");
+    } finally {
+      setGenerating(false);
+    }
   }
 
   return (
@@ -74,6 +109,8 @@ export default function PicksPage() {
 
       <main className="flex-1">
         <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          {generating && <LoadingOverlay text="正在生成选股，约需1分钟..." />}
+
           {/* 页面标题 */}
           <div className="mb-6">
             <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--text-primary)]">
@@ -132,6 +169,19 @@ export default function PicksPage() {
                     </Button>
                   )}
                   <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={handleGenerate}
+                    disabled={generating}
+                  >
+                    {generating ? (
+                      <RefreshCw size={14} className="animate-spin" />
+                    ) : (
+                      <Zap size={14} />
+                    )}
+                    生成今日选股
+                  </Button>
+                  <Button
                     variant="outline"
                     size="sm"
                     onClick={loadPicks}
@@ -147,6 +197,20 @@ export default function PicksPage() {
               </div>
             </div>
           </Card>
+
+          {/* 生成提示 */}
+          {generateMsg && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent)]/10 px-3 py-2">
+              <Zap size={14} className="shrink-0 text-[var(--accent)]" />
+              <p className="text-xs text-[var(--accent)]">{generateMsg}</p>
+            </div>
+          )}
+          {generateError && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-[var(--red)]/30 bg-[var(--red)]/10 px-3 py-2">
+              <AlertCircle size={14} className="shrink-0 text-[var(--red)]" />
+              <p className="text-xs text-[var(--red)]">{generateError}</p>
+            </div>
+          )}
 
           {/* 结果统计 */}
           {!loading && (
@@ -179,14 +243,29 @@ export default function PicksPage() {
                 <p className="mt-1 text-sm text-[var(--text-secondary)]">
                   {signalFilter !== "all" || dateFilter
                     ? "尝试调整筛选条件或清除筛选"
-                    : "请稍后再来查看最新选股"}
+                    : "点击下方按钮，立即生成今日选股"}
                 </p>
               </div>
-              {(signalFilter !== "all" || dateFilter) && (
-                <Button variant="outline" size="sm" onClick={handleReset}>
-                  清除筛选
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleGenerate}
+                  disabled={generating}
+                >
+                  {generating ? (
+                    <RefreshCw size={14} className="animate-spin" />
+                  ) : (
+                    <Zap size={14} />
+                  )}
+                  生成今日选股
                 </Button>
-              )}
+                {(signalFilter !== "all" || dateFilter) && (
+                  <Button variant="outline" size="sm" onClick={handleReset}>
+                    清除筛选
+                  </Button>
+                )}
+              </div>
             </Card>
           )}
         </div>

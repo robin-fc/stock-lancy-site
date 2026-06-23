@@ -161,3 +161,42 @@ export interface InvitationCode {
   used_at: string | null;
   created_at: string;
 }
+
+/** 股票基本信息缓存 */
+export interface StockBasicInfo {
+  symbol: string;
+  name: string;
+  exchange: string;
+  sector: string | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  pb_ratio: number | null;
+  updated_at: string;
+}
+
+/** AI分析报告缓存 */
+export interface StockAIAnalysis {
+  id: string;
+  symbol: string;
+  name: string;
+  signal: Signal;
+  confidence: number;
+  entry_price: number | null;
+  target_price: number | null;
+  stop_loss: number | null;
+  analysis: string;
+  summary: string;
+  key_factors: string[];
+  risk_level: RiskLevel;
+  indicators: Record<string, number>;
+  triggered_by: string | null;
+  created_at: string;
+}
+
+/** 股票搜索结果 */
+export interface StockSearchResult {
+  symbol: string;
+  name: string;
+  exchange: string;
+  pinyin?: string;
+}

@@ -16,6 +16,8 @@ import {
   Loader2,
   Activity,
   Zap,
+  Globe,
+  ExternalLink,
 } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
@@ -38,6 +40,24 @@ import {
 } from "@/lib/utils";
 import { RISK_LABELS } from "@/types";
 import type { StockPick, StockCandle } from "@/types";
+
+/** 根据股票代码判断交易所前缀 (6开头为上交所, 其余为深交所) */
+function getExchangePrefix(symbol: string): { lower: string; upper: string } {
+  if (symbol.startsWith("6")) {
+    return { lower: "sh", upper: "SH" };
+  }
+  return { lower: "sz", upper: "SZ" };
+}
+
+/** 生成第三方行情链接 */
+function getThirdPartyLinks(symbol: string) {
+  const { lower, upper } = getExchangePrefix(symbol);
+  return {
+    eastmoney: `https://quote.eastmoney.com/${lower}${symbol}.html`,
+    xueqiu: `https://xueqiu.com/S/${upper}${symbol}`,
+    tonghuashun: `https://stockpage.10jqka.com.cn/${lower}${symbol}/`,
+  };
+}
 
 /** 基于选股价格生成确定性 K 线数据 (无独立行情接口时的前端回退方案) */
 function generateCandles(pick: StockPick): StockCandle[] {
@@ -255,6 +275,8 @@ export default function PickDetailPage() {
     { label: "布林带下轨", value: ind.boll_lower, suffix: "" },
   ];
 
+  const thirdPartyLinks = getThirdPartyLinks(pick.symbol);
+
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
@@ -320,6 +342,48 @@ export default function PickDetailPage() {
           {watchlistError && (
             <p className="mb-4 text-xs text-[var(--red)]">{watchlistError}</p>
           )}
+
+          {/* 第三方行情链接 */}
+          <Card className="mb-6 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+                <Globe size={16} className="text-[var(--accent)]" />
+                第三方行情
+              </h2>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" asChild>
+                  <a
+                    href={thirdPartyLinks.eastmoney}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    东方财富
+                    <ExternalLink size={12} />
+                  </a>
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <a
+                    href={thirdPartyLinks.xueqiu}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    雪球
+                    <ExternalLink size={12} />
+                  </a>
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <a
+                    href={thirdPartyLinks.tonghuashun}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    同花顺
+                    <ExternalLink size={12} />
+                  </a>
+                </Button>
+              </div>
+            </div>
+          </Card>
 
           {/* 价格 + 置信度 */}
           <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
