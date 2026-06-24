@@ -569,3 +569,396 @@ ${Object.entries(factorScores).map(([k, v]) => {
     formula_version: formulaVersion,
   };
 }
+
+// ========== 盘中快照策略演进分析 ==========
+
+/** 盘中快照数据 (单只股票的4个时点) */
+interface IntradayStockSnapshot {
+  symbol: string;
+  name: string;
+  morning_open: { price: number; change_pct: number; volume: number } | null;
+  morning_close: { price: number; change_pct: number; volume: number } | null;
+  afternoon_open: { price: number; change_pct: number; volume: number } | null;
+  afternoon_close: { price: number; change_pct: number; volume: number } | null;
+}
+
+/** 盘中策略演进分析结果 */
+interface IntradayPatternResult {
+  ai_insight: string;
+  pattern_findings: { pattern: string; description: string; confidence: number }[];
+  strategy_adjustments: Record<string, number>;
+}
+
+const INTRADAY_SYSTEM_PROMPT = `你是一位顶级的A股盘中量化策略分析师，擅长从盘中4个时点（上午开盘9:30、午间休市11:30、下午开盘13:00、收盘15:00）的价格行为中提取可操作的交易规律和策略洞察。
+
+## 分析维度
+
+你需要从以下维度分析盘中价格行为：
+
+1. **冲高回落识别**: 哪些股票上午强势上涨但下午回落（上午涨下午跌），这类股票可能存在追高风险
+2. **探底回升识别**: 哪些股票上午弱势下跌但下午回升（上午跌下午涨），这类股票可能存在抄底机会
+3. **时段趋势对比**: 上午整体趋势 vs 下午整体趋势，判断资金流向变化
+4. **量价关系**: 成交量在不同时段的变化与价格走势的配合程度
+5. **与昨日对比**: 基于昨天的策略洞察，分析今天的变化和延续性
+
+## 策略调整建议
+
+基于盘中规律，你可以建议调整以下8个分析因子的权重（调整幅度建议在 -0.03 到 +0.03 之间）：
+- technical (技术面分析)
+- fundamental (基本面分析)
+- policy (政策面分析)
+- market_sentiment (市场情绪)
+- industry (行业面分析)
+- financial_report (财报面分析)
+- momentum (动量策略)
+- value (价值策略)
+
+例如：如果发现冲高回落现象普遍，可建议增加 technical 权重（关注短线技术卖点）、减少 momentum 权重。
+
+## 输出要求
+严格按照以下JSON格式返回（不要包含markdown代码块标记）：
+{
+  "ai_insight": "策略洞察文本(Markdown格式, 600-1200字, 必须包含: ## 盘中走势概览 ## 冲高回落与探底回升 ## 量价关系分析 ## 时段趋势对比 ## 策略优化建议)",
+  "pattern_findings": [
+    { "pattern": "规律名称(如: 冲高回落)", "description": "规律描述(包含具体股票和数据)", "confidence": 0-1的数字 }
+  ],
+  "strategy_adjustments": {
+    "technical": 0.0,
+    "momentum": 0.0
+  }
+}
+
+注意:
+- pattern_findings 至少包含2条, 最多6条规律
+- strategy_adjustments 只包含需要调整的因子, 不需要调整的因子不要列出, 值为0的也不要列出
+- confidence 反映该规律的可靠性, 基于样本数量和一致性
+- 用中文撰写所有内容
+- ai_insight 要专业、深入, 体现真正的盘中分析逻辑`;
+
+/**
+ * 分析盘中4次快照数据, 提取交易规律并生成策略洞察
+ * - 如果没有 AGNES_API_KEY, 生成基于规则的降级分析
+ * - 如果有 API key, 调用 Agnes AI 分析盘中规律
+ */
+export async function analyzeIntradayPatterns(
+  snapshots: IntradayStockSnapshot[],
+  sessionStats: {
+    morning: { avg_change_pct: number; up_count: number; down_count: number };
+    afternoon: { avg_change_pct: number; up_count: number; down_count: number };
+    full_day: { avg_change_pct: number; up_count: number; down_count: number };
+  },
+  yesterdayInsight?: string | null
+): Promise<IntradayPatternResult> {
+  // 如果没有 API key, 使用基于规则的降级分析
+  if (!AGNES_API_KEY) {
+    return generateIntradayFallback(snapshots, sessionStats, yesterdayInsight);
+  }
+
+  try {
+    const prompt = buildIntradayPrompt(snapshots, sessionStats, yesterdayInsight);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(`${AGNES_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AGNES_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: INTRADAY_SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.5,
+        max_tokens: 3000,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      return generateIntradayFallback(snapshots, sessionStats, yesterdayInsight);
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+
+    if (!content) {
+      return generateIntradayFallback(snapshots, sessionStats, yesterdayInsight);
+    }
+
+    // 清理可能的 markdown 代码块标记
+    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const result = JSON.parse(cleaned);
+
+    // 规范化 pattern_findings
+    const patternFindings: { pattern: string; description: string; confidence: number }[] = (
+      result.pattern_findings || []
+    ).map((p: any) => ({
+      pattern: p.pattern || '',
+      description: p.description || '',
+      confidence: Math.max(0, Math.min(1, p.confidence || 0.5)),
+    }));
+
+    // 规范化 strategy_adjustments (过滤掉值为0的)
+    const rawAdjustments: Record<string, number> = result.strategy_adjustments || {};
+    const strategyAdjustments: Record<string, number> = {};
+    for (const [key, val] of Object.entries(rawAdjustments)) {
+      const numVal = Number(val);
+      if (!isNaN(numVal) && numVal !== 0) {
+        // 限制调整幅度在 -0.03 到 +0.03
+        strategyAdjustments[key] = Math.max(-0.03, Math.min(0.03, Math.round(numVal * 1000) / 1000));
+      }
+    }
+
+    return {
+      ai_insight: result.ai_insight || '',
+      pattern_findings: patternFindings,
+      strategy_adjustments: strategyAdjustments,
+    };
+  } catch {
+    return generateIntradayFallback(snapshots, sessionStats, yesterdayInsight);
+  }
+}
+
+/** 构建盘中分析提示词 */
+function buildIntradayPrompt(
+  snapshots: IntradayStockSnapshot[],
+  sessionStats: {
+    morning: { avg_change_pct: number; up_count: number; down_count: number };
+    afternoon: { avg_change_pct: number; up_count: number; down_count: number };
+    full_day: { avg_change_pct: number; up_count: number; down_count: number };
+  },
+  yesterdayInsight?: string | null
+): string {
+  // 构建每只股票的盘中数据摘要
+  const stockData = snapshots.map((s) => {
+    const morningPct =
+      s.morning_open && s.morning_close && s.morning_open.price > 0
+        ? ((s.morning_close.price - s.morning_open.price) / s.morning_open.price) * 100
+        : null;
+    const afternoonPct =
+      s.afternoon_open && s.afternoon_close && s.afternoon_open.price > 0
+        ? ((s.afternoon_close.price - s.afternoon_open.price) / s.afternoon_open.price) * 100
+        : null;
+    const fullDayPct =
+      s.morning_open && s.afternoon_close && s.morning_open.price > 0
+        ? ((s.afternoon_close.price - s.morning_open.price) / s.morning_open.price) * 100
+        : null;
+
+    // 成交量变化 (上午 vs 下午)
+    const morningVol = s.morning_close?.volume || 0;
+    const afternoonVol = s.afternoon_close?.volume || 0;
+    const volChange =
+      morningVol > 0 ? ((afternoonVol - morningVol) / morningVol) * 100 : null;
+
+    return {
+      symbol: s.symbol,
+      name: s.name,
+      morning_open: s.morning_open?.price ?? null,
+      morning_close: s.morning_close?.price ?? null,
+      afternoon_open: s.afternoon_open?.price ?? null,
+      afternoon_close: s.afternoon_close?.price ?? null,
+      morning_change_pct: morningPct !== null ? Number(morningPct.toFixed(2)) : null,
+      afternoon_change_pct: afternoonPct !== null ? Number(afternoonPct.toFixed(2)) : null,
+      full_day_change_pct: fullDayPct !== null ? Number(fullDayPct.toFixed(2)) : null,
+      volume_change_pct: volChange !== null ? Number(volChange.toFixed(2)) : null,
+    };
+  });
+
+  return `请分析以下A股盘中4次快照数据，提取交易规律并生成策略洞察：
+
+## 时段统计概览
+- 上午时段 (9:30→11:30): 平均涨跌幅 ${sessionStats.morning.avg_change_pct}%, 上涨 ${sessionStats.morning.up_count} 只, 下跌 ${sessionStats.morning.down_count} 只
+- 下午时段 (13:00→15:00): 平均涨跌幅 ${sessionStats.afternoon.avg_change_pct}%, 上涨 ${sessionStats.afternoon.up_count} 只, 下跌 ${sessionStats.afternoon.down_count} 只
+- 全天 (9:30→15:00): 平均涨跌幅 ${sessionStats.full_day.avg_change_pct}%, 上涨 ${sessionStats.full_day.up_count} 只, 下跌 ${sessionStats.full_day.down_count} 只
+
+## 各股票盘中数据
+${JSON.stringify(stockData, null, 2)}
+
+${yesterdayInsight ? `## 昨日策略洞察 (用于对比分析)\n${yesterdayInsight.slice(0, 800)}` : '## 昨日策略洞察\n无昨日数据'}
+
+请基于以上盘中数据，分析冲高回落、探底回升等盘中规律，对比上午/下午趋势，分析量价关系，并与昨日对比，给出可操作的策略洞察和因子权重调整建议。`;
+}
+
+/** 无 API key 或 API 失败时的降级分析 (基于规则) */
+function generateIntradayFallback(
+  snapshots: IntradayStockSnapshot[],
+  sessionStats: {
+    morning: { avg_change_pct: number; up_count: number; down_count: number };
+    afternoon: { avg_change_pct: number; up_count: number; down_count: number };
+    full_day: { avg_change_pct: number; up_count: number; down_count: number };
+  },
+  yesterdayInsight?: string | null
+): IntradayPatternResult {
+  const patternFindings: { pattern: string; description: string; confidence: number }[] = [];
+  const strategyAdjustments: Record<string, number> = {};
+
+  // 计算每只股票的上午/下午涨跌幅
+  const stockChanges: {
+    symbol: string;
+    name: string;
+    morningPct: number | null;
+    afternoonPct: number | null;
+    fullDayPct: number | null;
+    volChange: number | null;
+  }[] = [];
+
+  for (const s of snapshots) {
+    const morningPct =
+      s.morning_open && s.morning_close && s.morning_open.price > 0
+        ? ((s.morning_close.price - s.morning_open.price) / s.morning_open.price) * 100
+        : null;
+    const afternoonPct =
+      s.afternoon_open && s.afternoon_close && s.afternoon_open.price > 0
+        ? ((s.afternoon_close.price - s.afternoon_open.price) / s.afternoon_open.price) * 100
+        : null;
+    const fullDayPct =
+      s.morning_open && s.afternoon_close && s.morning_open.price > 0
+        ? ((s.afternoon_close.price - s.morning_open.price) / s.morning_open.price) * 100
+        : null;
+    const morningVol = s.morning_close?.volume || 0;
+    const afternoonVol = s.afternoon_close?.volume || 0;
+    const volChange = morningVol > 0 ? ((afternoonVol - morningVol) / morningVol) * 100 : null;
+
+    stockChanges.push({ symbol: s.symbol, name: s.name, morningPct, afternoonPct, fullDayPct, volChange });
+  }
+
+  // 1. 识别冲高回落 (上午涨下午跌)
+  const surgeAndFade = stockChanges.filter(
+    (s) => s.morningPct !== null && s.afternoonPct !== null && s.morningPct > 0.5 && s.afternoonPct < -0.3
+  );
+  if (surgeAndFade.length > 0) {
+    patternFindings.push({
+      pattern: '冲高回落',
+      description: `${surgeAndFade.length}只股票上午上涨但下午回落: ${surgeAndFade.slice(0, 5).map((s) => `${s.name}(${s.morningPct!.toFixed(1)}%→${s.afternoonPct!.toFixed(1)}%)`).join('、')}。这类股票短线追高风险较大，建议关注技术面卖出信号。`,
+      confidence: Math.min(0.9, 0.5 + surgeAndFade.length * 0.05),
+    });
+    // 冲高回落普遍时, 增加技术面权重, 减少动量权重
+    if (surgeAndFade.length >= 3) {
+      strategyAdjustments.technical = 0.02;
+      strategyAdjustments.momentum = -0.02;
+    }
+  }
+
+  // 2. 识别探底回升 (上午跌下午涨)
+  const dipAndRecover = stockChanges.filter(
+    (s) => s.morningPct !== null && s.afternoonPct !== null && s.morningPct < -0.5 && s.afternoonPct > 0.3
+  );
+  if (dipAndRecover.length > 0) {
+    patternFindings.push({
+      pattern: '探底回升',
+      description: `${dipAndRecover.length}只股票上午下跌但下午回升: ${dipAndRecover.slice(0, 5).map((s) => `${s.name}(${s.morningPct!.toFixed(1)}%→${s.afternoonPct!.toFixed(1)}%)`).join('、')}。这类股票可能存在午后抄底机会，关注资金午后流入信号。`,
+      confidence: Math.min(0.9, 0.5 + dipAndRecover.length * 0.05),
+    });
+    // 探底回升普遍时, 增加市场情绪权重
+    if (dipAndRecover.length >= 3) {
+      strategyAdjustments.market_sentiment = 0.02;
+    }
+  }
+
+  // 3. 时段趋势对比
+  const morningAvg = sessionStats.morning.avg_change_pct;
+  const afternoonAvg = sessionStats.afternoon.avg_change_pct;
+  if (morningAvg > 0.3 && afternoonAvg < morningAvg * 0.3) {
+    patternFindings.push({
+      pattern: '上午强下午弱',
+      description: `上午平均涨${morningAvg.toFixed(2)}%，下午平均涨${afternoonAvg.toFixed(2)}%，下午动能明显减弱。市场可能在上午消化利好后下午获利了结，短线操作宜上午逢高减仓。`,
+      confidence: 0.7,
+    });
+    strategyAdjustments.technical = (strategyAdjustments.technical || 0) + 0.01;
+  } else if (morningAvg < -0.3 && afternoonAvg > Math.abs(morningAvg) * 0.5) {
+    patternFindings.push({
+      pattern: '上午弱下午强',
+      description: `上午平均跌${morningAvg.toFixed(2)}%，下午平均涨${afternoonAvg.toFixed(2)}%，下午出现修复性反弹。资金可能在午后低位介入，关注午后放量个股。`,
+      confidence: 0.7,
+    });
+    strategyAdjustments.market_sentiment = (strategyAdjustments.market_sentiment || 0) + 0.01;
+  } else {
+    patternFindings.push({
+      pattern: '时段趋势平稳',
+      description: `上午平均${morningAvg >= 0 ? '涨' : '跌'}${Math.abs(morningAvg).toFixed(2)}%，下午平均${afternoonAvg >= 0 ? '涨' : '跌'}${Math.abs(afternoonAvg).toFixed(2)}%，盘中趋势较为一致，无明显时段分化。`,
+      confidence: 0.6,
+    });
+  }
+
+  // 4. 量价关系分析
+  const volumeUp = stockChanges.filter(
+    (s) => s.volChange !== null && s.volChange > 20 && s.fullDayPct !== null && s.fullDayPct > 0
+  );
+  const volumeDown = stockChanges.filter(
+    (s) => s.volChange !== null && s.volChange > 20 && s.fullDayPct !== null && s.fullDayPct < 0
+  );
+  if (volumeUp.length > volumeDown.length && volumeUp.length > 0) {
+    patternFindings.push({
+      pattern: '放量上涨',
+      description: `${volumeUp.length}只股票下午放量且全天上涨: ${volumeUp.slice(0, 3).map((s) => s.name).join('、')}。量价配合良好，资金积极介入，动量策略有效性较高。`,
+      confidence: 0.65,
+    });
+    strategyAdjustments.momentum = (strategyAdjustments.momentum || 0) + 0.02;
+  } else if (volumeDown.length > volumeUp.length && volumeDown.length > 0) {
+    patternFindings.push({
+      pattern: '放量下跌',
+      description: `${volumeDown.length}只股票下午放量且全天下跌: ${volumeDown.slice(0, 3).map((s) => s.name).join('、')}。量价背离，资金出逃迹象明显，注意规避风险。`,
+      confidence: 0.65,
+    });
+    strategyAdjustments.market_sentiment = (strategyAdjustments.market_sentiment || 0) - 0.01;
+  }
+
+  // 5. 与昨日对比
+  if (yesterdayInsight) {
+    patternFindings.push({
+      pattern: '与昨日对比',
+      description: `今日全天平均涨跌幅${sessionStats.full_day.avg_change_pct.toFixed(2)}%，上涨${sessionStats.full_day.up_count}只下跌${sessionStats.full_day.down_count}只。参考昨日洞察进行对比分析，关注趋势延续性或反转信号。`,
+      confidence: 0.5,
+    });
+  }
+
+  // 确保至少有2条规律
+  if (patternFindings.length < 2) {
+    patternFindings.push({
+      pattern: '数据不足',
+      description: `当前快照数据样本有限（共${snapshots.length}只股票），盘中规律分析置信度较低。建议积累更多交易日数据后进行深度分析。`,
+      confidence: 0.3,
+    });
+  }
+
+  // 生成策略洞察文本
+  const insight = `## 盘中走势概览
+
+今日A股盘中4次快照采集完成，共覆盖${snapshots.length}只股票。
+
+- **上午时段** (9:30→11:30): 平均涨跌幅 ${morningAvg.toFixed(2)}%，上涨 ${sessionStats.morning.up_count} 只，下跌 ${sessionStats.morning.down_count} 只
+- **下午时段** (13:00→15:00): 平均涨跌幅 ${afternoonAvg.toFixed(2)}%，上涨 ${sessionStats.afternoon.up_count} 只，下跌 ${sessionStats.afternoon.down_count} 只
+- **全天表现**: 平均涨跌幅 ${sessionStats.full_day.avg_change_pct.toFixed(2)}%，上涨 ${sessionStats.full_day.up_count} 只，下跌 ${sessionStats.full_day.down_count} 只
+
+## 冲高回落与探底回升
+
+${surgeAndFade.length > 0 ? `**冲高回落** (${surgeAndFade.length}只): ${surgeAndFade.slice(0, 5).map((s) => `${s.name}(${s.morningPct!.toFixed(1)}%→${s.afternoonPct!.toFixed(1)}%)`).join('、')}` : '今日无明显冲高回落个股。'}
+
+${dipAndRecover.length > 0 ? `**探底回升** (${dipAndRecover.length}只): ${dipAndRecover.slice(0, 5).map((s) => `${s.name}(${s.morningPct!.toFixed(1)}%→${s.afternoonPct!.toFixed(1)}%)`).join('、')}` : '今日无明显探底回升个股。'}
+
+## 量价关系分析
+
+${volumeUp.length > 0 ? `放量上涨${volumeUp.length}只，量价配合良好。` : ''}${volumeDown.length > 0 ? `放量下跌${volumeDown.length}只，注意风险。` : ''}整体来看，${volumeUp.length >= volumeDown.length ? '资金偏向积极介入' : '资金偏向谨慎流出'}。
+
+## 时段趋势对比
+
+${morningAvg > afternoonAvg ? '上午动能强于下午，下午存在获利了结压力。' : afternoonAvg > morningAvg ? '下午动能强于上午，午后资金介入明显。' : '上午与下午趋势较为一致。'}
+
+## 策略优化建议
+
+${Object.keys(strategyAdjustments).length > 0 ? `基于今日盘中规律，建议调整以下因子权重: ${Object.entries(strategyAdjustments).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`).join('、')}。` : '今日盘中规律未触发因子权重调整，维持当前策略。'}${yesterdayInsight ? '建议结合昨日洞察持续跟踪趋势演变。' : ''}
+
+> 注: 本分析基于规则引擎生成（未启用AI），如需更深入的分析请配置 AGNES_API_KEY。`;
+
+  return {
+    ai_insight: insight,
+    pattern_findings: patternFindings,
+    strategy_adjustments: strategyAdjustments,
+  };
+}

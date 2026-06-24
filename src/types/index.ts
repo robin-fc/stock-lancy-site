@@ -253,3 +253,65 @@ export interface StockSearchResult {
   exchange: string;
   pinyin?: string;
 }
+
+/** 盘中快照类型 */
+export type SnapshotType = 'morning_open' | 'morning_close' | 'afternoon_open' | 'afternoon_close';
+
+export const SNAPSHOT_LABELS: Record<SnapshotType, string> = {
+  morning_open: '上午开盘',
+  morning_close: '午间休市',
+  afternoon_open: '下午开盘',
+  afternoon_close: '收盘',
+};
+
+/** 盘中快照 */
+export interface IntradaySnapshot {
+  id: string;
+  symbol: string;
+  name: string;
+  snapshot_date: string;
+  snapshot_type: SnapshotType;
+  price: number;
+  change_pct: number;
+  volume: number;
+  turnover: number;
+  indicators: Record<string, number>;
+  price_change: number | null;
+  price_change_pct: number | null;
+  volume_change_pct: number | null;
+  created_at: string;
+}
+
+/** 策略演进分析 */
+export interface StrategyEvolution {
+  id: string;
+  analysis_date: string;
+  morning_session: {
+    avg_change_pct: number;
+    up_count: number;
+    down_count: number;
+    max_gain: { symbol: string; name: string; pct: number } | null;
+    max_loss: { symbol: string; name: string; pct: number } | null;
+  };
+  afternoon_session: {
+    avg_change_pct: number;
+    up_count: number;
+    down_count: number;
+    max_gain: { symbol: string; name: string; pct: number } | null;
+    max_loss: { symbol: string; name: string; pct: number } | null;
+  };
+  full_day: {
+    avg_change_pct: number;
+    up_count: number;
+    down_count: number;
+    max_gain: { symbol: string; name: string; pct: number } | null;
+    max_loss: { symbol: string; name: string; pct: number } | null;
+  };
+  top_performers: { symbol: string; name: string; change_pct: number; signal: string }[];
+  bottom_performers: { symbol: string; name: string; change_pct: number; signal: string }[];
+  ai_insight: string;
+  pattern_findings: { pattern: string; description: string; confidence: number }[];
+  strategy_adjustments: Record<string, number>;
+  comparison_with_yesterday: Record<string, unknown> | null;
+  created_at: string;
+}

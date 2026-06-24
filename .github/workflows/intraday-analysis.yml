@@ -1,0 +1,76 @@
+name: Intraday Stock Analysis
+
+on:
+  schedule:
+    # 北京时间 9:30 - 上午开盘 (UTC 01:30)
+    - cron: '30 1 * * 1-5'
+    # 北京时间 11:35 - 午间休市 (UTC 03:35, 留5分钟确保数据更新)
+    - cron: '35 3 * * 1-5'
+    # 北京时间 13:05 - 下午开盘 (UTC 05:05)
+    - cron: '5 5 * * 1-5'
+    # 北京时间 15:05 - 收盘 (UTC 07:05, 留5分钟确保收盘数据)
+    - cron: '5 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      snapshot_type:
+        description: '快照类型'
+        required: true
+        type: choice
+        default: 'morning_open'
+        options:
+          - morning_open
+          - morning_close
+          - afternoon_open
+          - afternoon_close
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine snapshot type
+        id: type
+        run: |
+          # 根据触发时间自动判断快照类型
+          HOUR=$(date -u +%H)
+          MINUTE=$(date -u +%M)
+          TIME=$((HOUR * 60 + MINUTE))
+
+          if [ "${{ github.event.inputs.snapshot_type }}" != "" ]; then
+            echo "type=${{ github.event.inputs.snapshot_type }}" >> $GITHUB_OUTPUT
+          elif [ $TIME -ge 90 ] && [ $TIME -le 120 ]; then
+            echo "type=morning_open" >> $GITHUB_OUTPUT
+          elif [ $TIME -ge 210 ] && [ $TIME -le 240 ]; then
+            echo "type=morning_close" >> $GITHUB_OUTPUT
+          elif [ $TIME -ge 300 ] && [ $TIME -le 330 ]; then
+            echo "type=afternoon_open" >> $GITHUB_OUTPUT
+          elif [ $TIME -ge 420 ] && [ $TIME -le 450 ]; then
+            echo "type=afternoon_close" >> $GITHUB_OUTPUT
+          else
+            echo "type=morning_open" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger intraday snapshot
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ secrets.APP_URL }}
+        run: |
+          SNAPSHOT_TYPE="${{ steps.type.outputs.type }}"
+          echo "Triggering snapshot: $SNAPSHOT_TYPE"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "${APP_URL}/api/cron/intraday-snapshot?type=${SNAPSHOT_TYPE}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Snapshot failed with status $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "Snapshot completed successfully"

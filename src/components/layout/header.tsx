@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 
 const NAV_LINKS = [
   { href: "/picks", label: "选股" },
+  { href: "/intraday", label: "盘中分析" },
   { href: "/watchlist", label: "自选股" },
   { href: "/pricing", label: "会员" },
 ];
