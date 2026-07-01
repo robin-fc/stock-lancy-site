@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import {
   getQuote,
   getCandles,
@@ -33,17 +34,34 @@ function getPreviousSnapshotType(type: SnapshotType): SnapshotType | null {
   return SNAPSHOT_ORDER[idx - 1];
 }
 
-/** 采集盘中快照 (定时任务, 每个交易时段调用一次) */
+/** 采集盘中快照 (定时任务或用户手动触发) */
 export async function POST(request: NextRequest) {
   try {
-    // 验证 CRON_SECRET: 支持从 Authorization header 或 ?secret= 查询参数获取
+    // 验证身份: 支持 CRON_SECRET (定时任务) 或 用户登录 token (手动触发)
     const authHeader = request.headers.get('authorization');
     const headerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
     const { searchParams } = new URL(request.url);
     const querySecret = searchParams.get('secret') || '';
-    const token = headerToken || querySecret;
 
-    if (!token || token !== process.env.CRON_SECRET) {
+    let isAuthorized = false;
+
+    // 方式1: CRON_SECRET
+    if (headerToken && headerToken === process.env.CRON_SECRET) {
+      isAuthorized = true;
+    }
+    // 方式2: query param CRON_SECRET
+    if (querySecret && querySecret === process.env.CRON_SECRET) {
+      isAuthorized = true;
+    }
+    // 方式3: 用户登录 token
+    if (!isAuthorized && headerToken) {
+      const { data: userData } = await supabase.auth.getUser(headerToken);
+      if (userData.user) {
+        isAuthorized = true;
+      }
+    }
+
+    if (!isAuthorized) {
       return NextResponse.json(
         { error: '未授权访问' },
         { status: 401 }

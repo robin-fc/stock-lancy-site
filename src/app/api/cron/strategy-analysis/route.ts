@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { analyzeIntradayPatterns } from '@/lib/ai-service';
 import type { SnapshotType } from '@/types';
 
@@ -72,14 +73,21 @@ function computeSessionStat(
 /** 收盘后策略分析 (对比4次快照, AI 生成策略洞察) */
 export async function POST(request: NextRequest) {
   try {
-    // 验证 CRON_SECRET: 支持从 Authorization header 或 ?secret= 查询参数获取
+    // 验证身份: 支持 CRON_SECRET 或 用户登录 token
     const authHeader = request.headers.get('authorization');
     const headerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
     const { searchParams } = new URL(request.url);
     const querySecret = searchParams.get('secret') || '';
-    const token = headerToken || querySecret;
 
-    if (!token || token !== process.env.CRON_SECRET) {
+    let isAuthorized = false;
+    if (headerToken && headerToken === process.env.CRON_SECRET) isAuthorized = true;
+    if (querySecret && querySecret === process.env.CRON_SECRET) isAuthorized = true;
+    if (!isAuthorized && headerToken) {
+      const { data: userData } = await supabase.auth.getUser(headerToken);
+      if (userData.user) isAuthorized = true;
+    }
+
+    if (!isAuthorized) {
       return NextResponse.json(
         { error: '未授权访问' },
         { status: 401 }

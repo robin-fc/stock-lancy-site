@@ -15,6 +15,10 @@ import {
   Calendar,
   AlertCircle,
   Loader2,
+  Zap,
+  Camera,
+  BarChart3,
+  CheckCircle2,
 } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
@@ -1028,6 +1032,11 @@ export default function IntradayPage() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  // 手动触发快照采集
+  const [triggeringType, setTriggeringType] = React.useState<SnapshotType | null>(null);
+  const [triggerMsg, setTriggerMsg] = React.useState<string | null>(null);
+  const [triggerError, setTriggerError] = React.useState<string | null>(null);
+
   // 初始化 auth store
   React.useEffect(() => {
     if (!initialized) init();
@@ -1143,6 +1152,75 @@ export default function IntradayPage() {
     );
   }, [evolutions, selectedDate]);
 
+  // 手动触发快照采集
+  async function handleTriggerSnapshot(type: SnapshotType) {
+    setTriggeringType(type);
+    setTriggerMsg(null);
+    setTriggerError(null);
+    try {
+      const res = await authFetch(
+        `/api/cron/intraday-snapshot?type=${type}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        setTriggerError(await parseApiError(res));
+        return;
+      }
+      const data = await res.json();
+      if (data.skipped) {
+        setTriggerMsg(data.message || "今天非交易日，已跳过");
+      } else {
+        setTriggerMsg(
+          `「${SNAPSHOT_LABELS[type]}」采集完成：成功 ${data.success_count} 条${data.error_count > 0 ? `，失败 ${data.error_count} 条` : ""}`
+        );
+        // 如果是收盘快照，提示策略分析也在进行
+        if (type === "afternoon_close") {
+          setTriggerMsg(
+            `「收盘」快照采集完成，AI策略分析已自动触发，请稍后刷新查看`
+          );
+        }
+        // 刷新快照数据
+        await loadSnapshots(selectedDate, true);
+        // 如果是收盘，也刷新策略演进
+        if (type === "afternoon_close") {
+          setTimeout(() => loadEvolutions(), 5000);
+        }
+      }
+      // 5秒后清除提示
+      setTimeout(() => setTriggerMsg(null), 5000);
+    } catch {
+      setTriggerError("网络错误，请稍后重试");
+    } finally {
+      setTriggeringType(null);
+    }
+  }
+
+  // 手动触发策略分析
+  async function handleTriggerAnalysis() {
+    setTriggeringType("afternoon_close" as SnapshotType);
+    setTriggerMsg(null);
+    setTriggerError(null);
+    try {
+      const res = await authFetch("/api/cron/strategy-analysis", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        setTriggerError(await parseApiError(res));
+        return;
+      }
+      const data = await res.json();
+      setTriggerMsg(
+        `AI策略分析完成，发现 ${data.pattern_count || 0} 个规律`
+      );
+      await loadEvolutions();
+      setTimeout(() => setTriggerMsg(null), 5000);
+    } catch {
+      setTriggerError("网络错误，请稍后重试");
+    } finally {
+      setTriggeringType(null);
+    }
+  }
+
   function handleRefresh() {
     loadSnapshots(selectedDate, true);
     loadEvolutions();
@@ -1229,6 +1307,72 @@ export default function IntradayPage() {
               <p className="text-sm text-[var(--red)]">{error}</p>
             </div>
           )}
+
+          {/* 快照采集触发栏 */}
+          <Card className="mb-6 p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
+                <Camera size={13} /> 手动采集快照（点击对应时段按钮触发数据采集）
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
+                {SNAPSHOT_ORDER.map((type) => {
+                  const theme = SNAPSHOT_CARD_THEME[type];
+                  const isTriggering = triggeringType === type;
+                  const hasData = snapshotStatsMap[type] != null;
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => handleTriggerSnapshot(type)}
+                      disabled={triggeringType !== null}
+                      className={cn(
+                        "flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-medium transition-colors disabled:opacity-50",
+                        hasData
+                          ? "border-[var(--border)] bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                          : "border-[var(--border)] bg-[var(--bg)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      )}
+                      style={hasData ? { borderLeftWidth: "3px", borderLeftColor: theme.color } : undefined}
+                    >
+                      {isTriggering ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : hasData ? (
+                        <CheckCircle2 size={14} style={{ color: theme.color }} />
+                      ) : (
+                        <Camera size={14} />
+                      )}
+                      {SNAPSHOT_LABELS[type]}
+                      {hasData && (
+                        <span className="text-[var(--text-muted)]">✓</span>
+                      )}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={handleTriggerAnalysis}
+                  disabled={triggeringType !== null}
+                  className="flex items-center justify-center gap-2 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent)]/10 px-3 py-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20 disabled:opacity-50"
+                >
+                  {triggeringType === "afternoon_close" && triggerMsg?.includes("策略") ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <BarChart3 size={14} />
+                  )}
+                  AI策略分析
+                </button>
+              </div>
+              {triggerMsg && (
+                <div className="flex items-center gap-2 rounded-lg border border-[var(--green)]/30 bg-[var(--green)]/10 px-3 py-2">
+                  <CheckCircle2 size={14} className="shrink-0 text-[var(--green)]" />
+                  <p className="text-xs text-[var(--green)]">{triggerMsg}</p>
+                </div>
+              )}
+              {triggerError && (
+                <div className="flex items-center gap-2 rounded-lg border border-[var(--red)]/30 bg-[var(--red)]/10 px-3 py-2">
+                  <AlertCircle size={14} className="shrink-0 text-[var(--red)]" />
+                  <p className="text-xs text-[var(--red)]">{triggerError}</p>
+                </div>
+              )}
+            </div>
+          </Card>
 
           {/* 加载中 */}
           {snapshotsLoading ? (
