@@ -528,15 +528,27 @@ export default function PicksPage() {
                             {formatPrice(pick.current_price)}
                           </td>
                           {/* 入场价 */}
-                          <td className="px-3 py-3 text-right text-sm text-[var(--text-secondary)]">
+                          <td className="px-3 py-3 text-right text-sm text-[var(--text-secondary)]" title="AI建议的买入价格">
                             {formatPrice(pick.entry_price)}
                           </td>
                           {/* 目标价 */}
-                          <td className="px-3 py-3 text-right text-sm font-medium text-[var(--red)]">
+                          <td
+                            className={cn(
+                              "px-3 py-3 text-right text-sm font-medium",
+                              pick.signal === "sell" || pick.signal === "strong_sell"
+                                ? "text-[var(--green)]"
+                                : "text-[var(--red)]"
+                            )}
+                            title={
+                              pick.signal === "sell" || pick.signal === "strong_sell"
+                                ? "预期下跌目标价"
+                                : "预期上涨目标价"
+                            }
+                          >
                             {formatPrice(pick.target_price)}
                           </td>
                           {/* 止损价 */}
-                          <td className="px-3 py-3 text-right text-sm font-medium text-[var(--green)]">
+                          <td className="px-3 py-3 text-right text-sm font-medium text-[var(--green)]" title="跌破此价建议止损">
                             {formatPrice(pick.stop_loss)}
                           </td>
                           {/* 风险 */}

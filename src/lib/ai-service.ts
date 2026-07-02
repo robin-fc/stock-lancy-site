@@ -485,10 +485,22 @@ function generateFallbackAnalysis(
   ];
 
   const entryPrice = quote.current_price;
-  const targetPrice = signal === 'strong_buy' || signal === 'buy'
-    ? quote.current_price * 1.1
-    : quote.current_price * 0.95;
-  const stopLoss = quote.current_price * 0.92;
+  // 目标价: 买入信号=上行目标(+10%), 卖出信号=下行目标(-10%), 持有=±5%
+  const targetPrice = signal === 'strong_buy'
+    ? quote.current_price * 1.15
+    : signal === 'buy'
+    ? quote.current_price * 1.08
+    : signal === 'strong_sell'
+    ? quote.current_price * 0.85
+    : signal === 'sell'
+    ? quote.current_price * 0.92
+    : quote.current_price * 1.03; // hold
+  // 止损价: 始终在入场价下方
+  const stopLoss = signal === 'strong_buy' || signal === 'buy'
+    ? quote.current_price * 0.92   // 买入止损 -8%
+    : signal === 'sell' || signal === 'strong_sell'
+    ? quote.current_price * 1.05   // 卖出止损(反弹止损) +5%
+    : quote.current_price * 0.95;  // 持有止损 -5%
 
   const riskLevel: RiskLevel = Math.abs(totalScore - 50) > 25 ? 'high' : totalScore > 50 ? 'medium' : 'high';
 
@@ -548,8 +560,8 @@ ${Object.entries(factorScores).map(([k, v]) => {
 
 ### 操作建议
 - 建议买入价: ¥${entryPrice?.toFixed(2)}
-- 目标价: ¥${targetPrice?.toFixed(2)}
-- 止损价: ¥${stopLoss?.toFixed(2)}
+- 目标价: ¥${targetPrice?.toFixed(2)} ${signal === 'strong_buy' || signal === 'buy' ? '(预期上涨目标)' : signal === 'sell' || signal === 'strong_sell' ? '(预期下跌目标)' : '(预期波动目标)'}
+- 止损价: ¥${stopLoss?.toFixed(2)} ${signal === 'strong_buy' || signal === 'buy' ? '(跌破则止损)' : signal === 'sell' || signal === 'strong_sell' ? '(反弹则止损)' : '(跌破则止损)'}
 
 ## 风险提示
 本分析基于技术指标和有限的基本面数据，不构成投资建议。股市有风险，投资需谨慎。建议结合更多信息源综合判断。`;
