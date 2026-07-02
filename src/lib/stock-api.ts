@@ -35,47 +35,59 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-/** 获取股票实时报价 */
+/** 获取股票实时报价 (带重试) */
 export async function getQuote(symbol: string): Promise<StockQuote | null> {
-  try {
-    const secid = getSecId(symbol);
-    const url = `${EASTMONEY_QUOTE_URL}?secid=${secid}&fields=f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f170`;
+  // 最多重试3次
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const secid = getSecId(symbol);
+      const url = `${EASTMONEY_QUOTE_URL}?secid=${secid}&fields=f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f170`;
 
-    const res = await fetchWithTimeout(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://quote.eastmoney.com/',
-      },
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const data = json?.data;
-    if (!data || !data.f43) return null;
+      const res = await fetchWithTimeout(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Referer': 'https://quote.eastmoney.com/',
+        },
+      }, 6000);
+      if (!res.ok) {
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue; }
+        return null;
+      }
+      const json = await res.json();
+      const data = json?.data;
+      // data 存在且 f57(代码) 存在即为有效数据 (f43 可能为 0 表示停牌或未开盘)
+      if (!data || !data.f57) {
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue; }
+        return null;
+      }
 
-    // 东方财富返回的价格需要根据 f59(小数位数) 进行换算
-    const decimal = data.f59 || 2;
-    const divisor = Math.pow(10, decimal);
+      // 东方财富返回的价格需要根据 f59(小数位数) 进行换算
+      const decimal = data.f59 || 2;
+      const divisor = Math.pow(10, decimal);
 
-    const current = data.f43 / divisor;
-    const prevClose = data.f60 / divisor;
-    const change = current - prevClose;
-    const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+      const current = data.f43 / divisor;
+      const prevClose = data.f60 / divisor;
+      const change = current - prevClose;
+      const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
 
-    return {
-      symbol: data.f57 || symbol,
-      name: data.f58 || symbol,
-      current_price: current,
-      change,
-      change_pct: changePct,
-      high: data.f44 / divisor,
-      low: data.f45 / divisor,
-      open: data.f46 / divisor,
-      prev_close: prevClose,
-      volume: data.f47 || 0,
-    };
-  } catch {
-    return null;
+      return {
+        symbol: data.f57 || symbol,
+        name: data.f58 || symbol,
+        current_price: current,
+        change,
+        change_pct: changePct,
+        high: data.f44 / divisor,
+        low: data.f45 / divisor,
+        open: data.f46 / divisor,
+        prev_close: prevClose,
+        volume: data.f47 || 0,
+      };
+    } catch {
+      if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue; }
+      return null;
+    }
   }
+  return null;
 }
 
 /** 获取公司信息 (东方财富不提供单独的公司信息接口, 返回基本信息) */

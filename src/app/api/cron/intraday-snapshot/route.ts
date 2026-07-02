@@ -102,11 +102,11 @@ export async function POST(request: NextRequest) {
     for (const stock of DEFAULT_WATCHLIST) {
       const { symbol, name: defaultName } = stock;
       try {
-        // 获取实时报价
+        // 获取实时报价 (getQuote 内部已有3次重试)
         const quote = await getQuote(symbol);
-        if (!quote || quote.current_price === 0) {
+        if (!quote) {
           errorCount++;
-          await delay(300);
+          await delay(500);
           continue;
         }
 
@@ -142,7 +142,6 @@ export async function POST(request: NextRequest) {
             }
           }
         }
-        // morning_open 的前一个快照是前一交易日的 afternoon_close, 设为 null (跳过)
 
         // 成交额估算 (价格 × 成交量)
         const turnover = quote.current_price * quote.volume;
@@ -176,11 +175,11 @@ export async function POST(request: NextRequest) {
           successCount++;
         }
 
-        // 每只股票间隔 300ms
-        await delay(300);
+        // 每只股票间隔 500ms (增大间隔避免限流)
+        await delay(500);
       } catch {
         errorCount++;
-        await delay(300);
+        await delay(500);
       }
     }
 
